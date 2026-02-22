@@ -1,0 +1,10 @@
+# Copia este ficheiro para .env e preenche os valores.
+# NUNCA faças commit do ficheiro .env para o repositório.
+
+# Chave API do Google Gemini
+# Obtém em: https://aistudio.google.com/apikey
+GEMINI_API_KEY=
+
+# (Opcional) Domínio do frontend em produção para CORS
+# ex: https://iec81346.vercel.app
+ALLOWED_ORIGIN=*

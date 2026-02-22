@@ -1,0 +1,420 @@
+import { useState, useRef, useEffect } from "react";
+
+// ─── DADOS ESTÁTICOS ─────────────────────────────────────────────────────────
+const LETTERS_GUIDE = [
+  { letter: "B", short: "Sensores / Detetores" },
+  { letter: "C", short: "Armazenamento" },
+  { letter: "E", short: "Energia térmica" },
+  { letter: "F", short: "Proteção" },
+  { letter: "G", short: "Bombas / Geradores" },
+  { letter: "H", short: "Processamento" },
+  { letter: "K", short: "Controlo / PLC" },
+  { letter: "M", short: "Motores / Atuadores" },
+  { letter: "P", short: "Indicação / Display" },
+  { letter: "Q", short: "Corte de potência" },
+  { letter: "R", short: "Regulação / Restrição" },
+  { letter: "S", short: "Interação humana" },
+  { letter: "T", short: "Transformação" },
+  { letter: "U", short: "Suporte / Estrutura" },
+  { letter: "W", short: "Condução / Cabos" },
+  { letter: "X", short: "Ligações / Conectores" },
+];
+
+const EXAMPLES = [
+  "Motor de bomba de água do circuito de refrigeração",
+  "Sensor de temperatura na saída do permutador de calor",
+  "Variador de velocidade para motor trifásico",
+  "Botão de emergência na porta do quadro",
+  "Fusível de proteção do motor",
+  "Válvula solenoide de corte de ar comprimido",
+];
+
+// ─── HOOK: chamada ao backend ─────────────────────────────────────────────────
+function useChat() {
+  const [messages, setMessages] = useState([]);      // mensagens visíveis no UI
+  const [apiHistory, setApiHistory] = useState([]);  // histórico para o backend
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const send = async (text) => {
+    if (!text.trim() || loading) return;
+    setError(null);
+
+    const userMsg = { role: "user", content: text };
+    setMessages((prev) => [...prev, userMsg]);
+    const newHistory = [...apiHistory, userMsg];
+    setLoading(true);
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: newHistory }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Erro HTTP ${res.status}`);
+      }
+
+      const data = await res.json();
+      const raw = data.text || "";
+
+      let parsed = null;
+      try {
+        // Gemini com responseMimeType=application/json já devolve JSON limpo
+        parsed = JSON.parse(raw);
+      } catch {
+        // fallback: tenta extrair JSON de dentro do texto
+        const match = raw.match(/\{[\s\S]*\}/);
+        if (match) parsed = JSON.parse(match[0]);
+      }
+
+      const assistantMsg = { role: "assistant", content: raw, parsed };
+      setMessages((prev) => [...prev, assistantMsg]);
+      setApiHistory([...newHistory, { role: "assistant", content: raw }]);
+    } catch (err) {
+      setError(err.message);
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: "", parsed: null, isError: true, errorMsg: err.message },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const reset = () => {
+    setMessages([]);
+    setApiHistory([]);
+    setError(null);
+  };
+
+  return { messages, loading, error, send, reset };
+}
+
+// ─── COMPONENTES ─────────────────────────────────────────────────────────────
+
+function TypingIndicator() {
+  return (
+    <div style={s.typing}>
+      {[0, 0.2, 0.4].map((d, i) => (
+        <span key={i} style={{ ...s.dot, animationDelay: `${d}s` }} />
+      ))}
+      <style>{`@keyframes blink{0%,80%,100%{opacity:.15}40%{opacity:1}}`}</style>
+    </div>
+  );
+}
+
+function UserBubble({ text }) {
+  return (
+    <div style={s.userBubble}>
+      <div style={s.bubbleLabel}>CONSULTA</div>
+      <div style={s.userText}>{text}</div>
+    </div>
+  );
+}
+
+function ErrorBubble({ msg }) {
+  return (
+    <div style={s.errorBubble}>
+      <span style={{ color: "#f87171" }}>⚠ </span>
+      {msg || "Erro de ligação. Verifica a tua ligação e tenta novamente."}
+    </div>
+  );
+}
+
+function ResultCard({ parsed }) {
+  if (!parsed) return null;
+  const confColors = { alta: "#4ade80", media: "#f59e0b", baixa: "#f87171" };
+  const cc = confColors[parsed.confianca] || "#94a3b8";
+
+  return (
+    <div style={s.card}>
+      {/* Cabeçalho */}
+      <div style={s.cardHeader}>
+        <div style={s.letterCircle}>{parsed.letra}</div>
+        <div style={s.cardMeta}>
+          <div style={s.subcatRow}>
+            <span style={s.subcatBadge}>{parsed.subcategoria}</span>
+            <span style={s.subcatDesc}>{parsed.descricao_subcategoria}</span>
+          </div>
+          <div style={s.desigRow}>
+            <span style={s.desigLabel}>Designação:</span>
+            <code style={s.desigCode}>{parsed.designacao_completa_exemplo}</code>
+          </div>
+        </div>
+        <div style={{ ...s.confBadge, color: cc, background: cc + "22", border: `1px solid ${cc}44` }}>
+          {parsed.confianca}
+        </div>
+      </div>
+
+      {/* Explicação */}
+      <p style={s.explicacao}>{parsed.explicacao}</p>
+
+      {/* Alertas */}
+      {parsed.alertas?.length > 0 && (
+        <div style={s.alertasBox}>
+          {parsed.alertas.map((a, i) => (
+            <div key={i} style={s.alertaRow}>⚠ {a}</div>
+          ))}
+        </div>
+      )}
+
+      {/* Alternativas */}
+      {parsed.alternativas?.length > 0 && (
+        <div style={s.altsBox}>
+          <div style={s.altsTitle}>Alternativas a considerar</div>
+          {parsed.alternativas.map((alt, i) => (
+            <div key={i} style={s.altRow}>
+              <span style={s.altLetter}>{alt.letra}</span>
+              <span style={s.altSub}>{alt.subcategoria}</span>
+              <span style={s.altMotivo}>{alt.motivo}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AssistantBubble({ msg }) {
+  if (msg.isError) return <ErrorBubble msg={msg.errorMsg} />;
+  if (!msg.parsed) return <ErrorBubble msg="Não foi possível interpretar a resposta. Tenta reformular a descrição." />;
+  return <ResultCard parsed={msg.parsed} />;
+}
+
+function EmptyState({ onExample }) {
+  return (
+    <div style={s.empty}>
+      <div style={s.emptyIcon}>
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="1.5">
+          <circle cx="11" cy="11" r="8" />
+          <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          <line x1="11" y1="8" x2="11" y2="14" />
+          <line x1="8" y1="11" x2="14" y2="11" />
+        </svg>
+      </div>
+      <div style={s.emptyTitle}>Descreve um componente</div>
+      <div style={s.emptyBody}>
+        Escreve em linguagem natural e recebe a letra identificadora IEC 81346-2,
+        subcategoria e exemplo de designação completa.
+      </div>
+      <div style={s.exampleGrid}>
+        {EXAMPLES.map((ex) => (
+          <button key={ex} onClick={() => onExample(ex)} style={s.exampleBtn}>
+            {ex}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── APP PRINCIPAL ────────────────────────────────────────────────────────────
+export default function App() {
+  const { messages, loading, send, reset } = useChat();
+  const [input, setInput] = useState("");
+  const bottomRef = useRef(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, loading]);
+
+  const handleSend = async () => {
+    const text = input.trim();
+    if (!text || loading) return;
+    setInput("");
+    await send(text);
+    setTimeout(() => inputRef.current?.focus(), 50);
+  };
+
+  const handleKey = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
+
+  const handleReset = () => {
+    reset();
+    setInput("");
+    setTimeout(() => inputRef.current?.focus(), 50);
+  };
+
+  return (
+    <div style={s.root}>
+      {/* Grid de fundo */}
+      <div style={s.gridBg} />
+
+      {/* Header */}
+      <header style={s.header}>
+        <div style={s.headerLeft}>
+          <div style={s.logo}>
+            <span style={s.logoIec}>IEC</span>
+            <span style={s.logoNum}>81346</span>
+          </div>
+          <div>
+            <div style={s.appTitle}>Assistente de Nomenclatura</div>
+            <div style={s.appSub}>IEC 81346-2 · EPLAN · Automação Industrial</div>
+          </div>
+        </div>
+        <button onClick={handleReset} style={s.resetBtn}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <polyline points="1 4 1 10 7 10" />
+            <path d="M3.51 15a9 9 0 1 0 .49-4.17" />
+          </svg>
+          Nova consulta
+        </button>
+      </header>
+
+      {/* Body */}
+      <div style={s.body}>
+        {/* Sidebar */}
+        <aside style={s.sidebar}>
+          <div style={s.sideSection}>
+            <div style={s.sideTitle}>Letras Identificadoras</div>
+            {LETTERS_GUIDE.map((item) => (
+              <div key={item.letter} style={s.sideRow}>
+                <span style={s.sideLetter}>{item.letter}</span>
+                <span style={s.sideDesc}>{item.short}</span>
+              </div>
+            ))}
+          </div>
+          <div style={s.sideSection}>
+            <div style={s.sideTitle}>Prefixos de Aspeto</div>
+            {[
+              { p: "=", label: "Funcional", c: "#4ade80" },
+              { p: "+", label: "Localização", c: "#60a5fa" },
+              { p: "-", label: "Produto", c: "#f59e0b" },
+            ].map((x) => (
+              <div key={x.p} style={s.prefixRow}>
+                <span style={{ ...s.prefixSymbol, color: x.c }}>{x.p}</span>
+                <span style={s.prefixLabel}>{x.label}</span>
+              </div>
+            ))}
+            <div style={s.exampleDesig}>
+              <span style={{ color: "#4ade80" }}>=CA1</span>
+              <span style={{ color: "#60a5fa" }}>+Q1</span>
+              <span style={{ color: "#f59e0b" }}>-M1</span>
+            </div>
+          </div>
+        </aside>
+
+        {/* Chat */}
+        <main style={s.chat}>
+          {messages.length === 0 ? (
+            <EmptyState onExample={setInput} />
+          ) : (
+            <div style={s.messageList}>
+              {messages.map((msg, i) =>
+                msg.role === "user" ? (
+                  <UserBubble key={i} text={msg.content} />
+                ) : (
+                  <AssistantBubble key={i} msg={msg} />
+                )
+              )}
+              {loading && <TypingIndicator />}
+              <div ref={bottomRef} />
+            </div>
+          )}
+
+          {/* Input */}
+          <div style={s.inputArea}>
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKey}
+              placeholder='Descreve o componente em linguagem natural... ex: "sensor de temperatura no circuito de refrigeração"'
+              rows={2}
+              disabled={loading}
+              style={s.textarea}
+            />
+            <button
+              onClick={handleSend}
+              disabled={loading || !input.trim()}
+              style={{ ...s.sendBtn, opacity: loading || !input.trim() ? 0.4 : 1 }}
+            >
+              {loading ? (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="12" cy="12" r="10" strokeDasharray="60" strokeDashoffset="20">
+                    <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite" />
+                  </circle>
+                </svg>
+              ) : (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <line x1="22" y1="2" x2="11" y2="13" />
+                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                </svg>
+              )}
+            </button>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// ─── ESTILOS ──────────────────────────────────────────────────────────────────
+const s = {
+  root: { display:"flex", flexDirection:"column", height:"100vh", background:"#0a0f1a", color:"#e2e8f0", fontFamily:"'JetBrains Mono','Courier New',monospace", position:"relative", overflow:"hidden" },
+  gridBg: { position:"absolute", inset:0, backgroundImage:"linear-gradient(rgba(74,222,128,0.04) 1px,transparent 1px),linear-gradient(90deg,rgba(74,222,128,0.04) 1px,transparent 1px)", backgroundSize:"40px 40px", pointerEvents:"none", zIndex:0 },
+  header: { display:"flex", alignItems:"center", justifyContent:"space-between", padding:"12px 20px", borderBottom:"1px solid rgba(74,222,128,0.15)", background:"rgba(10,15,26,0.97)", zIndex:10, position:"relative", flexShrink:0 },
+  headerLeft: { display:"flex", alignItems:"center", gap:14 },
+  logo: { width:44, height:44, background:"rgba(74,222,128,0.12)", border:"1px solid rgba(74,222,128,0.35)", borderRadius:6, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", lineHeight:1, flexShrink:0 },
+  logoIec: { fontSize:13, fontWeight:700, color:"#4ade80", letterSpacing:1 },
+  logoNum: { fontSize:9, color:"rgba(74,222,128,0.6)", letterSpacing:0.5 },
+  appTitle: { fontSize:15, fontWeight:700, color:"#f1f5f9", letterSpacing:0.3 },
+  appSub: { fontSize:10, color:"#64748b", marginTop:1, letterSpacing:0.5 },
+  resetBtn: { display:"flex", alignItems:"center", gap:6, padding:"6px 12px", background:"transparent", border:"1px solid rgba(100,116,139,0.35)", borderRadius:4, color:"#94a3b8", cursor:"pointer", fontSize:11, fontFamily:"inherit" },
+  body: { display:"flex", flex:1, overflow:"hidden", position:"relative", zIndex:1 },
+  sidebar: { width:210, padding:"14px 12px", borderRight:"1px solid rgba(74,222,128,0.1)", overflowY:"auto", background:"rgba(8,12,22,0.6)", flexShrink:0, display:"flex", flexDirection:"column", gap:20 },
+  sideSection: {},
+  sideTitle: { fontSize:9, fontWeight:700, color:"#4ade80", letterSpacing:2, textTransform:"uppercase", marginBottom:10 },
+  sideRow: { display:"flex", alignItems:"center", gap:8, padding:"3px 6px", marginBottom:1 },
+  sideLetter: { fontSize:12, fontWeight:700, color:"#4ade80", width:14, flexShrink:0 },
+  sideDesc: { fontSize:10, color:"#64748b", lineHeight:1.3 },
+  prefixRow: { display:"flex", alignItems:"center", gap:8, padding:"3px 6px" },
+  prefixSymbol: { fontSize:16, fontWeight:700, width:14, textAlign:"center" },
+  prefixLabel: { fontSize:10, color:"#64748b" },
+  exampleDesig: { marginTop:8, padding:"6px 8px", background:"rgba(74,222,128,0.05)", border:"1px solid rgba(74,222,128,0.15)", borderRadius:4, fontSize:12, fontWeight:700, display:"flex", gap:0 },
+  chat: { flex:1, display:"flex", flexDirection:"column", overflow:"hidden" },
+  messageList: { flex:1, overflowY:"auto", padding:"20px 24px", display:"flex", flexDirection:"column", gap:16 },
+  empty: { flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:"24px 32px", gap:16, textAlign:"center" },
+  emptyIcon: { width:72, height:72, borderRadius:"50%", background:"rgba(74,222,128,0.08)", border:"1px solid rgba(74,222,128,0.2)", display:"flex", alignItems:"center", justifyContent:"center" },
+  emptyTitle: { fontSize:17, fontWeight:700, color:"#f1f5f9" },
+  emptyBody: { fontSize:12, color:"#64748b", maxWidth:400, lineHeight:1.7 },
+  exampleGrid: { display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, maxWidth:560, width:"100%", marginTop:4 },
+  exampleBtn: { padding:"8px 12px", background:"rgba(74,222,128,0.05)", border:"1px solid rgba(74,222,128,0.18)", borderRadius:4, color:"#94a3b8", cursor:"pointer", fontSize:11, fontFamily:"inherit", textAlign:"left", lineHeight:1.4 },
+  inputArea: { display:"flex", gap:10, padding:"14px 24px", borderTop:"1px solid rgba(74,222,128,0.12)", background:"rgba(8,12,22,0.9)", alignItems:"flex-end", flexShrink:0 },
+  textarea: { flex:1, background:"rgba(255,255,255,0.04)", border:"1px solid rgba(74,222,128,0.25)", borderRadius:6, padding:"10px 14px", color:"#e2e8f0", fontSize:12, fontFamily:"inherit", resize:"none", outline:"none", lineHeight:1.6 },
+  sendBtn: { width:42, height:42, borderRadius:6, background:"rgba(74,222,128,0.15)", border:"1px solid rgba(74,222,128,0.35)", color:"#4ade80", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 },
+  userBubble: { alignSelf:"flex-end", maxWidth:"70%", background:"rgba(74,222,128,0.08)", border:"1px solid rgba(74,222,128,0.2)", borderRadius:"8px 8px 2px 8px", padding:"10px 14px" },
+  bubbleLabel: { fontSize:8, fontWeight:700, color:"#4ade80", letterSpacing:2, marginBottom:4 },
+  userText: { fontSize:12, color:"#e2e8f0", lineHeight:1.6 },
+  card: { alignSelf:"flex-start", maxWidth:"90%", background:"rgba(15,20,35,0.85)", border:"1px solid rgba(100,116,139,0.2)", borderRadius:"2px 8px 8px 8px", padding:"14px 16px", display:"flex", flexDirection:"column", gap:10 },
+  cardHeader: { display:"flex", alignItems:"flex-start", gap:12 },
+  letterCircle: { width:48, height:48, borderRadius:"50%", background:"rgba(74,222,128,0.12)", border:"2px solid rgba(74,222,128,0.4)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:22, fontWeight:700, color:"#4ade80", flexShrink:0 },
+  cardMeta: { flex:1, display:"flex", flexDirection:"column", gap:6, paddingTop:2 },
+  subcatRow: { display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" },
+  subcatBadge: { padding:"2px 7px", background:"rgba(96,165,250,0.15)", border:"1px solid rgba(96,165,250,0.3)", borderRadius:3, fontSize:11, fontWeight:700, color:"#60a5fa", letterSpacing:0.5 },
+  subcatDesc: { fontSize:11, color:"#94a3b8" },
+  desigRow: { display:"flex", alignItems:"center", gap:8 },
+  desigLabel: { fontSize:10, color:"#64748b", letterSpacing:0.5 },
+  desigCode: { fontSize:13, fontWeight:700, color:"#f59e0b", background:"rgba(245,158,11,0.1)", padding:"2px 8px", borderRadius:3, border:"1px solid rgba(245,158,11,0.2)", fontFamily:"inherit" },
+  confBadge: { padding:"3px 8px", borderRadius:10, fontSize:9, fontWeight:700, letterSpacing:1.5, textTransform:"uppercase", flexShrink:0 },
+  explicacao: { fontSize:12, color:"#94a3b8", lineHeight:1.7, paddingLeft:60, margin:0 },
+  alertasBox: { paddingLeft:60, display:"flex", flexDirection:"column", gap:4 },
+  alertaRow: { fontSize:11, color:"#d97706", background:"rgba(245,158,11,0.06)", border:"1px solid rgba(245,158,11,0.15)", borderRadius:4, padding:"5px 10px", lineHeight:1.5 },
+  altsBox: { paddingLeft:60, background:"rgba(100,116,139,0.06)", border:"1px solid rgba(100,116,139,0.12)", borderRadius:4, padding:"8px 12px" },
+  altsTitle: { fontSize:9, fontWeight:700, color:"#64748b", letterSpacing:2, textTransform:"uppercase", marginBottom:8 },
+  altRow: { display:"flex", alignItems:"center", gap:8, marginBottom:4 },
+  altLetter: { fontSize:12, fontWeight:700, color:"#94a3b8", width:14 },
+  altSub: { fontSize:10, color:"#60a5fa", padding:"1px 5px", background:"rgba(96,165,250,0.08)", borderRadius:2, border:"1px solid rgba(96,165,250,0.2)" },
+  altMotivo: { fontSize:10, color:"#64748b", lineHeight:1.4 },
+  errorBubble: { alignSelf:"flex-start", padding:"10px 14px", background:"rgba(248,113,113,0.08)", border:"1px solid rgba(248,113,113,0.2)", borderRadius:"2px 8px 8px 8px", fontSize:12, color:"#94a3b8" },
+  typing: { display:"flex", gap:5, padding:"12px 16px", alignSelf:"flex-start" },
+  dot: { width:6, height:6, borderRadius:"50%", background:"#4ade80", display:"inline-block", animation:"blink 1.4s infinite" },
+};
