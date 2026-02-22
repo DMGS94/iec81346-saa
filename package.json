@@ -1,10 +1,18 @@
-# Copia este ficheiro para .env e preenche os valores.
-# NUNCA faças commit do ficheiro .env para o repositório.
-
-# Chave API do Google Gemini
-# Obtém em: https://aistudio.google.com/apikey
-GEMINI_API_KEY=
-
-# (Opcional) Domínio do frontend em produção para CORS
-# ex: https://iec81346.vercel.app
-ALLOWED_ORIGIN=*
+{
+  "name": "iec81346-nomenclatura",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.4.1"
+  }
+}
